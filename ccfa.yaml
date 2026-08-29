@@ -4,7 +4,7 @@ project:
   target_venues:
     - ASPLOS
     - EuroSys
-  stage: ap_g0c_adjudicated
+  stage: ap_g0r_protocol_frozen
 
 decision:
   status: collective_recovery_capability_divergence_confirmed
@@ -38,5 +38,9 @@ gates:
     config: configs/ap_g0c.json
     summary: results/ap_g0c_tp2_summary.json
     status: adjudicated_capability_divergence
+  ap_g0r:
+    protocol: docs/AP_G0R_PROTOCOL.md
+    config: configs/ap_g0r.json
+    status: protocol_frozen_pending_implementation
   ap_g0:
     status: not_started

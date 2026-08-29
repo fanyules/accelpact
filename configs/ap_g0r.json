@@ -1,0 +1,67 @@
+{
+  "schema": "accelpact.ap_g0r.config.v1",
+  "seed": 20260829,
+  "iterations": 128,
+  "calibration_iterations": 8,
+  "calibration_min_pending_generations": 8,
+  "calibration_litmus": "allocator_pending_window_calibration",
+  "negative_control_followup_iterations": 8,
+  "negative_control_min_reuse_qualified_generations": 2,
+  "tensor_numel": 2097152,
+  "dtype": "float32",
+  "poison_offset": 1,
+  "churn_allocations": 8,
+  "post_completion_probes": 8,
+  "blocker_matrix_dim": 2048,
+  "blocker_matmul_count": 16,
+  "min_pending_generations": 120,
+  "min_reuse_qualified_generations": 32,
+  "process_timeout_seconds": 180,
+  "discovery_processes_per_platform": 1,
+  "confirmation_processes_per_abnormal_cell": 5,
+  "abnormal_confirmation": "at_least_4_of_5_complete_fresh_processes",
+  "platforms": {
+    "a100": {
+      "devices": [0],
+      "backend": "cuda",
+      "allocator_backend": "native"
+    },
+    "910b": {
+      "devices": [0],
+      "backend": "npu",
+      "allocator_backend": "native"
+    }
+  },
+  "litmus_order": [
+    "allocator_missing_consumer_registration",
+    "allocator_wrong_stream_registration",
+    "allocator_same_stream_recycle_baseline",
+    "allocator_cross_stream_record_stream",
+    "allocator_cross_stream_manual_join",
+    "allocator_two_consumer_record_stream"
+  ],
+  "negative_controls": [
+    "allocator_missing_consumer_registration",
+    "allocator_wrong_stream_registration"
+  ],
+  "classifications": [
+    "construct_calibration_pass",
+    "valid_pass",
+    "negative_control_detected",
+    "negative_control_missed",
+    "protocol_violation",
+    "inconclusive",
+    "unsupported",
+    "harness_error"
+  ],
+  "exit_codes": {
+    "construct_calibration_pass": 0,
+    "valid_pass": 0,
+    "negative_control_detected": 0,
+    "protocol_violation": 2,
+    "negative_control_missed": 3,
+    "harness_error": 4,
+    "inconclusive": 5,
+    "unsupported": 5
+  }
+}

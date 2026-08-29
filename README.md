@@ -32,6 +32,8 @@ No automatic repair, model workload, or large fuzzing framework is implemented.
 The TP2 communicator-generation protocol is frozen in
 [`docs/AP_G0C_PROTOCOL.md`](docs/AP_G0C_PROTOCOL.md); its canonical campaign
 summary is [`results/ap_g0c_tp2_summary.json`](results/ap_g0c_tp2_summary.json).
+The next frozen discovery gate is the TP1 native allocator-retirement protocol
+in [`docs/AP_G0R_PROTOCOL.md`](docs/AP_G0R_PROTOCOL.md).
 
 ## Local checks
 
