@@ -1,0 +1,82 @@
+{
+  "schema": "accelpact.ap_g0c.campaign_summary.v1",
+  "protocol_id": "AP-G0C",
+  "campaign": "ap_g0c_tp2_20260829T214339CST",
+  "source_revision": "bf81c36ac89785cef48f32de046e65061160d4ea",
+  "deployment_archive_sha256": "47897ff2cf805f05912b20b91306968ac004f063f752090b70b1c906b142c709",
+  "world_size": 2,
+  "devices_per_platform": [0, 1],
+  "platforms": {
+    "a100": {
+      "device_group_backend": "nccl",
+      "outcomes": {
+        "stale_generation_dispatch": {
+          "classification": "negative_control_detected",
+          "fresh_process_pairs": 1
+        },
+        "collective_same_generation_reuse": {
+          "classification": "valid_pass",
+          "fresh_process_pairs": 1,
+          "epochs_per_pair": 128
+        },
+        "collective_clean_destroy_recreate": {
+          "classification": "capability_pass",
+          "fresh_process_pairs": 5,
+          "confirmed_pairs": 5
+        },
+        "collective_partial_epoch_timeout_recreate": {
+          "classification": "expected_timeout_recovered",
+          "fresh_process_pairs": 5,
+          "confirmed_pairs": 5,
+          "recovery_epochs_per_pair": 128
+        }
+      },
+      "evidence_archive_sha256": "79f1955fdbca6f9ffa7ef25875eb4bee7f11b1e71d86d33830ea836c28cc39f0"
+    },
+    "910b": {
+      "device_group_backend": "hccl",
+      "outcomes": {
+        "stale_generation_dispatch": {
+          "classification": "negative_control_detected",
+          "fresh_process_pairs": 1
+        },
+        "collective_same_generation_reuse": {
+          "classification": "valid_pass",
+          "fresh_process_pairs": 1,
+          "epochs_per_pair": 128
+        },
+        "collective_clean_destroy_recreate": {
+          "classification": "capability_pass",
+          "fresh_process_pairs": 5,
+          "confirmed_pairs": 5
+        },
+        "collective_partial_epoch_timeout_recreate": {
+          "classification": "reinitialization_capability_failure",
+          "fresh_process_pairs": 5,
+          "confirmed_pairs": 5,
+          "rank_exit_codes": {
+            "0": -15,
+            "1": 4
+          },
+          "last_valid_phase": "ready_destroy",
+          "destroyed_marker_ranks": [1],
+          "backend_watchdog_timeout_ranks": [0],
+          "backend_fatal_termination_ranks": [0]
+        }
+      },
+      "evidence_archive_sha256": "ca0e478613d7e64f0677fcdb1412c95911f1c7662451e9818cafd6999314aec6"
+    }
+  },
+  "integrity": {
+    "run_summaries": 24,
+    "run_manifests": 24,
+    "manifest_artifacts_validated": 452,
+    "validation_errors": 0,
+    "preflight_and_postflight_compute_processes": 0
+  },
+  "claim_boundary": {
+    "classification": "runtime_reinitialization_capability_limitation",
+    "protocol_violation": false,
+    "reason": "The incomplete epoch is intentional and public process-group reinitialization is not a qualified runtime contract in this gate."
+  }
+}

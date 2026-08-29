@@ -197,30 +197,88 @@ The original discovery JSONL and logs were also retrieved without modification:
 - A100 archive: `370f922df8fca5c38275ec0feb8ff004715ce6f3c3e40f1c7ad0eec573d7a3df`
 - 910B archive: `d99f7ffa82e85f0ce0f611ce3bd469cba09b66dd540e1b83f6b8a3f425b38847`
 
-## 9. Exact next actions
+## 9. AP-G0C TP2 adjudication
 
-1. Keep the AP-G0Q raw evidence immutable and retain the A100 result as a known
-   regression seed, not an AccelPact novelty claim.
-2. Freeze a separate TP2 communicator-generation protocol before implementation.
-   An aborted communicator must be destroyed; recovery creates a new generation
-   rather than reusing the aborted object.
-3. Give TP2 its own process timeout, result manifest, device/rank ownership, and
-   fresh-process confirmation rule before accelerator execution.
-4. The confirmed A100 non-negative-control result meets the frozen 4/5 threshold
-   for scoped diagnosis and local repair experiments, while remaining labeled as
-   a reproduction of a known failure class.
-5. Gate generic automatic repair and full-system investment on the stricter
-   multi-root project threshold below.
+Final run ID: `ap_g0c_tp2_20260829T214339CST`.
 
-## 10. Scientific decision boundary
+The frozen AP-G0C protocol ran from source revision
+`bf81c36ac89785cef48f32de046e65061160d4ea`. Each platform used devices 0 and 1,
+one rank per device, exact `int64[4]` payloads, and a separate torchrun job for
+every fresh process pair.
 
-The adjudicated evidence qualifies oracle sensitivity and confirms one known
-PyTorch CUDA-path failure class. AccelPact earns a systems implementation only if
-later experiments find at least two current-stack violations with different roots,
-including one independent of vLLM and one causing a silent stale read, deadlock,
-or poisoned fallback. At least one violation must arise from a pre-frozen
+| Litmus | A100/NCCL | 910B/HCCL |
+| --- | --- | --- |
+| stale generation dispatch | detected | detected |
+| 128 matched same-generation epochs | pass | pass |
+| clean destroy/recreate | 5/5 `capability_pass` | 5/5 `capability_pass` |
+| partial epoch then recreate | 5/5 `expected_timeout_recovered` | 5/5 `reinitialization_capability_failure` |
+
+For every 910B partial-epoch pair, both ranks published `fault_ready`,
+`fault_observed`, and `ready_destroy`. HCCL's watchdog reported the designated
+rank-0 collective timeout and announced process termination. Rank 1 returned
+from group destruction and published `destroyed`; rank 0 remained in the
+teardown path, rank 1's bounded out-of-band wait expired, and torchrun then
+terminated rank 0. The five pairs produced the same structured rank exits
+(`rank 0=-15`, `rank 1=4`) and the same last valid phase.
+
+This is an in-process communicator-reinitialization capability limitation, not
+an AP-G0C protocol violation. The incomplete collective is the intentional
+stimulus, and the public process-group reinitialization path is not a qualified
+contract in this gate. A100's successful recovery is a matched capability
+control, not evidence that HCCL violated a promised API.
+
+Preflight and postflight snapshots found no accelerator compute process on
+either platform. The retrieved evidence contains 24 run manifests and 452
+manifested artifacts; every size and SHA-256 entry validated.
+
+Evidence locations:
+
+```text
+/data/AccelPact-bf81c36/results/ap_g0c_tp2_20260829T214339CST
+results/raw_work/ap_g0c_tp2_20260829T214339CST
+```
+
+Archive SHA-256:
+
+- A100: `79f1955fdbca6f9ffa7ef25875eb4bee7f11b1e71d86d33830ea836c28cc39f0`
+- 910B: `ca0e478613d7e64f0677fcdb1412c95911f1c7662451e9818cafd6999314aec6`
+
+The canonical compact result is
+[`results/ap_g0c_tp2_summary.json`](../results/ap_g0c_tp2_summary.json).
+
+Commissioning attempts remain immutable but are excluded from the scientific
+matrix. They exposed three harness issues: an NPU preflight incorrectly queried
+NCCL metadata, the adjudicator command was constructed before marker creation,
+and backend-fatal worker evidence was initially left at a conservative harness
+classification. Each issue received a focused regression test before the final
+uniform rerun.
+
+## 10. Exact next actions
+
+1. Keep AP-G0Q and AP-G0C raw evidence immutable.
+2. Freeze a separate repair gate before execution. Its 910B path should replace
+   the failed in-process communicator recreation with a fresh worker-process
+   pair, then require 128 exact epochs on a new communicator generation.
+3. Measure process-replacement recovery latency separately from protocol
+   correctness; do not compare raw A100 and 910B timings as performance results.
+4. Continue the allocator/event/graph sequence families to search for a genuine
+   current-contract violation independent of the known PyTorch regression seed.
+5. Gate generic repair synthesis and workload integration on the stricter
+   multi-root threshold below.
+
+## 11. Scientific decision boundary
+
+The evidence qualifies both AP-G0Q and AP-G0C oracle sensitivity. It confirms a
+known PyTorch CUDA-path failure class and a separate, vLLM-independent HCCL
+reinitialization capability limitation. The latter does not count as a protocol
+violation under the frozen claim boundary.
+
+AccelPact earns a full systems implementation only if later experiments find at
+least two current-stack violations with different roots, including one
+independent of vLLM and one causing a silent stale read, deadlock, or poisoned
+fallback. At least one violation must arise from a pre-frozen
 protocol-generated sequence rather than copying a public issue reproducer.
 
-If all new findings are documented invalid usage or already-known issue
-reproductions, stop at a regression/conformance suite; do not present it as an
-ASPLOS system.
+If all new findings are documented capability boundaries, invalid usage, or
+already-known issue reproductions, stop at a regression/conformance suite; do
+not present it as an ASPLOS system.
