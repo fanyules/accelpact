@@ -137,43 +137,86 @@ The rebound control must be rerun alone in a fresh process. The preceding
 missing-join poison is not yet classified as a runtime violation because the
 test did not retain and explicitly reset the failed graph object.
 
-## 8. Exact next actions
+## 8. Completed adjudication
 
-1. Run `rebound_input` alone on 910B in one fresh process. It must be detected
-   without a harness error to finish oracle qualification.
-2. Run `capture_abort_eager_recovery` in five additional sequential fresh
-   processes on A100. Confirmation requires at least four of five failures.
-3. Run the same litmus in five matched fresh 910B processes as a clean-control
-   distribution. Do not reinterpret a known PyTorch regression as novelty.
-4. Preserve every JSONL, log, timeout, exit code, stack version, and SHA-256.
-5. Only after this adjudication, freeze a separate TP2 communicator-generation
-   protocol. Collective abort destroys a communicator; recovery must create a
-   new generation rather than reuse the aborted object.
+Run ID: `ap_g0q_adjudication_20260829T192202CST`.
 
-Representative commands after entering the already authorized host:
+Every cell used a separate Python process, device 0, seed `20260829`, a
+120-second outer timeout, and a unique output filename. `--iterations 128` was
+supplied for contract consistency; both adjudication litmus tests are
+non-iterative and do not loop over that value. Preflight and postflight checks
+found no accelerator compute process on either platform.
 
-```bash
-# 910B container, isolated negative control
-ASCEND_RT_VISIBLE_DEVICES=0 PYTHONPATH=/data/AccelPact-bb25b98/src \
-  python3 /data/AccelPact-bb25b98/scripts/run_ap_g0q.py \
-  --backend npu --iterations 128 --seed 20260829 \
-  --litmus rebound_input --output RESULT.jsonl
+**910B isolated negative control**
 
-# A100, isolated confirmation cell
-CUDA_VISIBLE_DEVICES=0 PYTHONPATH=/data/AccelPact-bb25b98/src \
-  "$PYTHON" /data/AccelPact-bb25b98/scripts/run_ap_g0q.py \
-  --backend cuda --iterations 128 --seed 20260829 \
-  --litmus capture_abort_eager_recovery --output RESULT.jsonl
+- `rebound_input` was detected in a fresh process with exit code 0,
+  `negative_control_detected`, `replayable`, distinct captured and rebound
+  addresses, and `stale_generation_detected=true`.
+- The preceding discovery-run harness error is therefore resolved as process
+  contamination from the earlier invalid missing-join capture, not an oracle
+  miss and not a CANN runtime failure.
+
+**Matched capture-abort recovery trials**
+
+- A100: 5/5 trials returned exit code 2 and
+  `protocol_violation -> poisoned`. Eager RNG recovery failed with the same
+  capture-state error in every process, and diagnostic `graph.reset()` did not
+  restore RNG operation. The device-synchronized litmus region measured
+  27.883 +/- 2.845 ms (mean +/- sample SD, n=5).
+- 910B: 5/5 trials returned exit code 0 and
+  `valid_pass -> clean_fallback`. Eager RNG, allocator probe, new stream, and
+  graph cleanup all succeeded. The same device-synchronized litmus region
+  measured 351.991 +/- 10.950 ms (mean +/- sample SD, n=5).
+- These timings document the execution boundary only; they are not a
+  cross-platform performance comparison.
+
+The two deployed trees have identical core files. After normalizing CRLF to LF,
+their Git blob IDs exactly match commit `bb25b98`.
+
+Evidence remains unchanged on both servers at:
+
+```text
+/data/AccelPact-bb25b98/results/ap_g0q_adjudication_20260829T192202CST
 ```
 
-Wrap every command in a finite external timeout and use a new output filename;
-the runner refuses to overwrite results.
+The retrieved local raw-work copy is ignored by Git at:
 
-## 9. Scientific decision boundary
+```text
+results/raw_work/ap_g0q_adjudication_20260829T192202CST
+```
 
-The current evidence only qualifies the abstract oracle and reproduces one
-known CUDA failure class. AccelPact earns a systems implementation only if later
-experiments find at least two current-stack violations with different roots,
+Adjudication archive SHA-256:
+
+- A100: `e165944cc6826b5d2aff1f1e6c93aef5fff3bec73cd9984c4d205fee30b4b94b`
+- 910B: `78bc067516717412ec589d4b9747f34eaf955f6ffcdf6578cf98427dcbaab551`
+
+All 54 file-level checksum entries in the retrieved evidence validated.
+
+The original discovery JSONL and logs were also retrieved without modification:
+
+- A100 archive: `370f922df8fca5c38275ec0feb8ff004715ce6f3c3e40f1c7ad0eec573d7a3df`
+- 910B archive: `d99f7ffa82e85f0ce0f611ce3bd469cba09b66dd540e1b83f6b8a3f425b38847`
+
+## 9. Exact next actions
+
+1. Keep the AP-G0Q raw evidence immutable and retain the A100 result as a known
+   regression seed, not an AccelPact novelty claim.
+2. Freeze a separate TP2 communicator-generation protocol before implementation.
+   An aborted communicator must be destroyed; recovery creates a new generation
+   rather than reusing the aborted object.
+3. Give TP2 its own process timeout, result manifest, device/rank ownership, and
+   fresh-process confirmation rule before accelerator execution.
+4. The confirmed A100 non-negative-control result meets the frozen 4/5 threshold
+   for scoped diagnosis and local repair experiments, while remaining labeled as
+   a reproduction of a known failure class.
+5. Gate generic automatic repair and full-system investment on the stricter
+   multi-root project threshold below.
+
+## 10. Scientific decision boundary
+
+The adjudicated evidence qualifies oracle sensitivity and confirms one known
+PyTorch CUDA-path failure class. AccelPact earns a systems implementation only if
+later experiments find at least two current-stack violations with different roots,
 including one independent of vLLM and one causing a silent stale read, deadlock,
 or poisoned fallback. At least one violation must arise from a pre-frozen
 protocol-generated sequence rather than copying a public issue reproducer.
@@ -181,4 +224,3 @@ protocol-generated sequence rather than copying a public issue reproducer.
 If all new findings are documented invalid usage or already-known issue
 reproductions, stop at a regression/conformance suite; do not present it as an
 ASPLOS system.
-

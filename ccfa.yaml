@@ -4,11 +4,16 @@ project:
   target_venues:
     - ASPLOS
     - EuroSys
-  stage: ap_g0q
+  stage: ap_g0q_adjudicated
 
 decision:
-  status: protocol_frozen_pending_execution
+  status: pytorch_capture_recovery_failure_class_reproduced
   claim_scope: host-runtime stateful protocol conformance
+  evidence_run: ap_g0q_adjudication_20260829T192202CST
+  oracle_sensitivity: qualified
+  runtime_conformance:
+    a100: failed_capture_abort_recovery_5_of_5
+    ascend_910b: clean_fallback_5_of_5
   excluded_scope:
     - kernel-internal barriers
     - cross-platform floating-point equality
@@ -18,7 +23,6 @@ gates:
   ap_g0q:
     protocol: docs/AP_G0Q_PROTOCOL.md
     config: configs/ap_g0q.json
-    status: frozen_pending_execution
+    status: adjudicated_failure_class_reproduced
   ap_g0:
     status: not_started
-
