@@ -34,6 +34,8 @@ The TP2 communicator-generation protocol is frozen in
 summary is [`results/ap_g0c_tp2_summary.json`](results/ap_g0c_tp2_summary.json).
 The next frozen discovery gate is the TP1 native allocator-retirement protocol
 in [`docs/AP_G0R_PROTOCOL.md`](docs/AP_G0R_PROTOCOL.md).
+The current project status, environment usage, evidence map, and exact next
+actions are maintained in [`docs/EXPERIMENT_HANDOFF.md`](docs/EXPERIMENT_HANDOFF.md).
 
 ## Local checks
 
