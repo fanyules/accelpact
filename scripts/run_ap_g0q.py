@@ -288,7 +288,7 @@ def event_multi_waiter(
     torch = backend.torch
     producer = backend.stream()
     waiters = (backend.stream(), backend.stream())
-    event = backend.event(external=backend.name == "npu")
+    event = backend.event()
     slot = torch.zeros(1, dtype=torch.int64, device=backend.device)
     outputs = [
         torch.empty(iterations, dtype=torch.int64, device=backend.device)
@@ -333,14 +333,16 @@ def buffer_reuse_with_ready_and_consumed_events(
     torch = backend.torch
     producer = backend.stream()
     consumer = backend.stream()
-    ready = backend.event()
-    consumed = backend.event()
     slot = torch.zeros(1, dtype=torch.int64, device=backend.device)
     observed = torch.empty(iterations, dtype=torch.int64, device=backend.device)
+    retained_events = []
     for generation in range(1, iterations + 1):
+        ready = backend.event()
+        consumed = backend.event()
+        retained_events.extend((ready, consumed))
         with backend.stream_context(producer):
             if generation > 1:
-                producer.wait_event(consumed)
+                producer.wait_event(retained_events[-3])
             slot.fill_(generation)
             ready.record(producer)
         with backend.stream_context(consumer):
@@ -356,7 +358,12 @@ def buffer_reuse_with_ready_and_consumed_events(
         litmus_id="buffer_reuse_with_ready_and_consumed_events",
         backend=backend.name,
         classification="valid_pass",
-        observations={"iterations": iterations, "two_event_handshake": True},
+        observations={
+            "iterations": iterations,
+            "two_event_handshake": True,
+            "fresh_event_pair_per_generation": True,
+            "retained_event_count": len(retained_events),
+        },
     )
 
 
