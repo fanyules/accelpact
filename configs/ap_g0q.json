@@ -1,0 +1,41 @@
+{
+  "schema": "accelpact.ap_g0q.config.v1",
+  "seed": 20260829,
+  "iterations": 128,
+  "discovery_processes_per_platform": 1,
+  "confirmation_processes_per_abnormal_cell": 5,
+  "process_timeout_seconds": 120,
+  "platforms": {
+    "a100": {
+      "devices": [0],
+      "backend": "cuda",
+      "precision": "int64_or_exact_integer",
+      "distributed": false
+    },
+    "910b": {
+      "devices": [0],
+      "backend": "npu",
+      "precision": "int64_or_exact_integer",
+      "distributed": false
+    }
+  },
+  "litmus": [
+    "event_rerecord_single_waiter",
+    "event_multi_waiter",
+    "buffer_reuse_with_ready_and_consumed_events",
+    "graph_static_input_generations",
+    "graph_cross_stream_join",
+    "capture_abort_eager_recovery"
+  ],
+  "negative_controls": [
+    "graph_missing_cross_stream_join",
+    "graph_rebound_external_input"
+  ],
+  "continue_rule": {
+    "valid_control_requirement": "all supported valid litmus cells pass",
+    "negative_control_requirement": "both negative controls are detected where supported",
+    "abnormal_confirmation": "at_least_4_of_5_fresh_processes",
+    "collective_qualification": "run_after_oracle_qualification_even_if_tp1_is_clean",
+    "repair_investment": "one_non_negative_control_protocol_violation_confirmed_4_of_5"
+  }
+}

@@ -1,0 +1,24 @@
+project:
+  name: AccelPact
+  target_family: systems-architecture
+  target_venues:
+    - ASPLOS
+    - EuroSys
+  stage: ap_g0q
+
+decision:
+  status: protocol_frozen_pending_execution
+  claim_scope: host-runtime stateful protocol conformance
+  excluded_scope:
+    - kernel-internal barriers
+    - cross-platform floating-point equality
+    - automatic repair before a stable violation
+
+gates:
+  ap_g0q:
+    protocol: docs/AP_G0Q_PROTOCOL.md
+    config: configs/ap_g0q.json
+    status: frozen_pending_execution
+  ap_g0:
+    status: not_started
+
