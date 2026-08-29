@@ -42,10 +42,11 @@ _ALLOWED_TRANSITIONS = {
         "epoch_open": frozenset({"enqueued"}),
         "enqueued": frozenset({"completed", "failed_unknown"}),
         "completed": frozenset({"reusable_same_generation"}),
+        "reusable_same_generation": frozenset({"epoch_open", "retiring"}),
+        "retiring": frozenset({"destroyed"}),
         "failed_unknown": frozenset({"aborting"}),
         "aborting": frozenset({"destroyed"}),
         "destroyed": frozenset({"recreated"}),
-        "reusable_same_generation": frozenset(),
         "recreated": frozenset(),
     },
 }

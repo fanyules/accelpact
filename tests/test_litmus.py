@@ -55,6 +55,31 @@ class LifecycleOracleTests(unittest.TestCase):
         oracle.transition("reusable_same_generation")
         self.assertEqual(oracle.state, "reusable_same_generation")
 
+    def test_collective_success_loops_across_multiple_epochs(self) -> None:
+        oracle = LifecycleOracle("collective", "collective-generation-7")
+        for epoch in range(3):
+            for state in ("enqueued", "completed", "reusable_same_generation"):
+                oracle.transition(state)
+            if epoch < 2:
+                oracle.transition("epoch_open")
+
+        self.assertEqual(oracle.state, "reusable_same_generation")
+        self.assertEqual(len(oracle.history), 11)
+
+    def test_collective_clean_retire_destroys_and_recreates(self) -> None:
+        oracle = LifecycleOracle("collective", "collective-generation-7")
+        for state in (
+            "enqueued",
+            "completed",
+            "reusable_same_generation",
+            "retiring",
+            "destroyed",
+            "recreated",
+        ):
+            oracle.transition(state)
+
+        self.assertEqual(oracle.state, "recreated")
+
     def test_collective_unknown_failure_requires_destroy_and_recreate(self) -> None:
         oracle = LifecycleOracle("collective", "collective-generation-7")
         oracle.transition("enqueued")
@@ -64,6 +89,25 @@ class LifecycleOracleTests(unittest.TestCase):
         for state in ("aborting", "destroyed", "recreated"):
             oracle.transition(state)
         self.assertEqual(oracle.state, "recreated")
+
+    def test_collective_clean_and_failure_branches_cannot_cross(self) -> None:
+        clean = LifecycleOracle("collective", "collective-clean")
+        for state in ("enqueued", "completed", "reusable_same_generation"):
+            clean.transition(state)
+        clean_history = clean.history
+        with self.assertRaises(InvalidTransition):
+            clean.transition("failed_unknown")
+        self.assertEqual(clean.state, "reusable_same_generation")
+        self.assertEqual(clean.history, clean_history)
+
+        failed = LifecycleOracle("collective", "collective-failed")
+        for state in ("enqueued", "failed_unknown"):
+            failed.transition(state)
+        failed_history = failed.history
+        with self.assertRaises(InvalidTransition):
+            failed.transition("retiring")
+        self.assertEqual(failed.state, "failed_unknown")
+        self.assertEqual(failed.history, failed_history)
 
     def test_illegal_transition_does_not_mutate_state_or_history(self) -> None:
         oracle = LifecycleOracle("buffer", "buffer-illegal")
