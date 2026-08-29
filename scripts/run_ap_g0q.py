@@ -83,7 +83,10 @@ class TorchDeviceBackend:
         return self.api.Event(enable_timing=False)
 
     def capture_event(self) -> Any:
-        return self.event(external=self.name == "npu")
+        # Cross-stream capture dependencies are internal graph event nodes.
+        # NPU ExternalEvent is reserved for host-side graph update/dispatch and
+        # permits only one wait per record in the current torch-npu contract.
+        return self.event()
 
     def reset_external_event(self, event: Any, stream: Any) -> None:
         reset = getattr(event, "reset", None)
