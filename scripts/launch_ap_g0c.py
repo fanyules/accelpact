@@ -694,20 +694,11 @@ def launch(args: argparse.Namespace) -> int:
     torchrun_log_dir = args.run_dir / "torchrun"
     environment, environment_overrides = platform_environment(config, args)
     command = build_torchrun_command(config, args, torchrun_log_dir)
-    adjudicator_command = build_adjudicator_command(args)
     args.run_dir.mkdir(parents=True, exist_ok=False)
     torchrun_log_dir.mkdir()
 
     runtime_environment, runtime_error = inspect_runtime_environment(
         config, args, environment_overrides
-    )
-    _write_json_new(
-        args.run_dir / "commands.json",
-        {
-            "working_directory": str(REPOSITORY_ROOT),
-            "torchrun": command,
-            "adjudicator": adjudicator_command,
-        },
     )
     _write_json_new(
         args.run_dir / "environment.json",
@@ -754,6 +745,16 @@ def launch(args: argparse.Namespace) -> int:
         launch_error=launch_error,
     )
     _write_json_new(args.run_dir / "launcher_evidence.json", evidence)
+
+    adjudicator_command = build_adjudicator_command(args)
+    _write_json_new(
+        args.run_dir / "commands.json",
+        {
+            "working_directory": str(REPOSITORY_ROOT),
+            "torchrun": command,
+            "adjudicator": adjudicator_command,
+        },
+    )
 
     try:
         adjudicator_exit_code = invoke_adjudicator(adjudicator_command, args.run_dir)

@@ -212,6 +212,87 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("combined.log", manifest["artifacts"])
         self.assertNotIn("sha256_manifest.json", manifest["artifacts"])
 
+    def test_adjudicator_command_discovers_markers_created_by_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            torchrun = root / "torchrun"
+            torchrun.write_text("", encoding="utf-8")
+            args = self.args(root, torchrun.resolve())
+            args.litmus = "collective_clean_destroy_recreate"
+            config = launcher.load_config(args.config)
+            statuses = []
+            for rank in range(2):
+                status = self.rank_status(args, config, rank)
+                status["classification"] = "capability_pass"
+                statuses.append(status)
+            output = "\n".join(json.dumps(status) for status in statuses) + "\n"
+
+            def supervise(*_args: object, **_kwargs: object) -> tuple[object, ...]:
+                for phase in launcher.MARKER_PHASES[args.litmus]:
+                    for rank in range(2):
+                        launcher._write_json_new(
+                            args.run_dir / "control" / phase / f"rank-{rank:04d}.json",
+                            {
+                                "litmus_id": args.litmus,
+                                "phase": phase,
+                                "protocol_id": launcher.PROTOCOL_ID,
+                                "rank": rank,
+                                "run_id": args.run_id,
+                                "schedule_digest": launcher.schedule_digest(
+                                    config, args
+                                ),
+                                "world_size": launcher.WORLD_SIZE,
+                            },
+                        )
+                return output, 0, False, []
+
+            def adjudicate(command: list[str], run_dir: Path) -> int:
+                marker_index = command.index("--marker")
+                self.assertEqual(command[marker_index + 1], str(run_dir / "control"))
+                launcher._write_json_new(
+                    run_dir / "summary.json",
+                    {"aggregate_classification": "capability_pass", "exit_code": 0},
+                )
+                launcher._write_text_new(run_dir / "adjudicator.log", "summary\n")
+                launcher._write_json_new(
+                    run_dir / "adjudicator_status.json",
+                    {"exit_code": 0, "summary_exists": True},
+                )
+                return 0
+
+            with (
+                patch.object(launcher, "_require_linux"),
+                patch.object(
+                    launcher,
+                    "inspect_runtime_environment",
+                    return_value=(
+                        {
+                            "python": {"version": "3.10.test"},
+                            "torch": "2.11.test",
+                            "torch_npu": None,
+                            "cuda": "12.8",
+                            "nccl": [2, 28, 9],
+                            "backend": {"name": "nccl", "available": True},
+                            "visible_devices": {
+                                "count": 2,
+                                "names": ["A100-0", "A100-1"],
+                            },
+                        },
+                        None,
+                    ),
+                ),
+                patch.object(launcher, "supervise", side_effect=supervise),
+                patch.object(launcher, "invoke_adjudicator", side_effect=adjudicate),
+            ):
+                exit_code = launcher.launch(args)
+
+            commands = json.loads(
+                (args.run_dir / "commands.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("--marker", commands["adjudicator"])
+
     def test_timeout_terminates_then_kills_the_new_process_group(self) -> None:
         process = TimeoutProcess()
         with (
