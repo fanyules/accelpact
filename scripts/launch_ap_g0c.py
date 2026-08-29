@@ -225,15 +225,16 @@ def inspect_runtime_environment(
             "device_api_available": available,
         }
         report["visible_devices"] = {"count": device_count, "names": names}
-        report["cuda"] = _version_value(
-            getattr(getattr(torch, "version", None), "cuda", None)
-        )
-        cuda_api = getattr(torch, "cuda", None)
-        nccl = getattr(cuda_api, "nccl", None) if cuda_api is not None else None
-        nccl_version = getattr(nccl, "version", None)
-        report["nccl"] = _version_value(
-            nccl_version() if callable(nccl_version) else None
-        )
+        if device_type == "cuda":
+            report["cuda"] = _version_value(
+                getattr(getattr(torch, "version", None), "cuda", None)
+            )
+            cuda_api = getattr(torch, "cuda", None)
+            nccl = getattr(cuda_api, "nccl", None) if cuda_api is not None else None
+            nccl_version = getattr(nccl, "version", None)
+            report["nccl"] = _version_value(
+                nccl_version() if callable(nccl_version) else None
+            )
         if not available:
             raise RuntimeError(f"torch.{device_type} is unavailable")
         if device_count != WORLD_SIZE:

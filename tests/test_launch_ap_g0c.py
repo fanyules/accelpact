@@ -483,6 +483,76 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(missing_error["error_type"], "ModuleNotFoundError")
         self.assertEqual(missing_report["launch_error"], missing_error)
 
+    def test_npu_runtime_preflight_never_queries_nccl(self) -> None:
+        class TrapNccl:
+            @staticmethod
+            def version() -> None:
+                raise AssertionError("NCCL must not be queried for an NPU platform")
+
+        class CudaApi:
+            nccl = TrapNccl()
+
+        class NpuApi:
+            @staticmethod
+            def is_available() -> bool:
+                return True
+
+            @staticmethod
+            def device_count() -> int:
+                return 2
+
+            @staticmethod
+            def get_device_name(index: int) -> str:
+                return f"910B-{index}"
+
+        class Torch:
+            __version__ = "2.10.test"
+            cuda = CudaApi()
+            npu = NpuApi()
+
+        class TorchNpu:
+            __version__ = "2.10.test-npu"
+
+        class Dist:
+            @staticmethod
+            def is_backend_available(name: str) -> bool:
+                return name == "hccl"
+
+        def loader(name: str) -> object:
+            return {
+                "torch": Torch(),
+                "torch.distributed": Dist(),
+                "torch_npu": TorchNpu(),
+            }[name]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            torchrun = root / "torchrun"
+            torchrun.write_text("", encoding="utf-8")
+            args = self.args(root, torchrun.resolve())
+            args.platform = "910b"
+            config = launcher.load_config(args.config)
+            report, error = launcher.inspect_runtime_environment(
+                config,
+                args,
+                {"ASCEND_RT_VISIBLE_DEVICES": "0,1"},
+                module_loader=loader,
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(report["torch_npu"], "2.10.test-npu")
+        self.assertIsNone(report["cuda"])
+        self.assertIsNone(report["nccl"])
+        self.assertEqual(
+            report["backend"],
+            {
+                "name": "hccl",
+                "available": True,
+                "device_api_available": True,
+            },
+        )
+        self.assertEqual(report["visible_devices"]["names"], ["910B-0", "910B-1"])
+
     def test_torchrun_path_preflight_leaves_no_run_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
