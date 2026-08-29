@@ -4,7 +4,7 @@ project:
   target_venues:
     - ASPLOS
     - EuroSys
-  stage: ap_g0q_adjudicated
+  stage: ap_g0c_protocol_frozen
 
 decision:
   status: pytorch_capture_recovery_failure_class_reproduced
@@ -24,5 +24,9 @@ gates:
     protocol: docs/AP_G0Q_PROTOCOL.md
     config: configs/ap_g0q.json
     status: adjudicated_failure_class_reproduced
+  ap_g0c:
+    protocol: docs/AP_G0C_PROTOCOL.md
+    config: configs/ap_g0c.json
+    status: protocol_frozen_pending_implementation
   ap_g0:
     status: not_started

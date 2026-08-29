@@ -1,0 +1,79 @@
+{
+  "schema": "accelpact.ap_g0c.config.v1",
+  "seed": 20260829,
+  "world_size": 2,
+  "dtype": "int64",
+  "tensor_shape": [4],
+  "reduce_op": "sum",
+  "same_generation_epochs": 128,
+  "clean_recreate_warmup_epochs": 8,
+  "recovery_epochs": 128,
+  "retired_generation_for_negative_control": 0,
+  "current_generation_for_negative_control": 1,
+  "fault_epoch": 1,
+  "fault_submit_ranks": [0],
+  "fault_scope": "designated_rank_0_only",
+  "control_group_timeout_seconds": 60,
+  "device_group_timeout_seconds": 15,
+  "work_wait_timeout_seconds": 15,
+  "oob_phase_timeout_seconds": 60,
+  "outer_process_timeout_seconds": 180,
+  "discovery_process_pairs_per_platform": 1,
+  "normal_abnormal_confirmation_process_pairs": 5,
+  "clean_recreate_process_pairs": 5,
+  "timeout_recreate_process_pairs": 5,
+  "abnormal_confirmation": "at_least_4_of_5_complete_fresh_process_pairs",
+  "platforms": {
+    "a100": {
+      "devices": [0, 1],
+      "device_type": "cuda",
+      "device_group_backend": "nccl",
+      "control_group_backend": "gloo",
+      "launch_environment": {
+        "TORCH_NCCL_BLOCKING_WAIT": "1"
+      }
+    },
+    "910b": {
+      "devices": [0, 1],
+      "device_type": "npu",
+      "device_group_backend": "hccl",
+      "control_group_backend": "gloo",
+      "launch_environment": {
+        "HCCL_BLOCKING_WAIT": "1"
+      }
+    }
+  },
+  "litmus_order": [
+    "stale_generation_dispatch",
+    "collective_same_generation_reuse",
+    "collective_clean_destroy_recreate",
+    "collective_partial_epoch_timeout_recreate"
+  ],
+  "classifications": [
+    "valid_pass",
+    "negative_control_detected",
+    "negative_control_missed",
+    "capability_pass",
+    "expected_timeout_recovered",
+    "capability_unavailable",
+    "reinitialization_capability_failure",
+    "capability_timeout",
+    "protocol_violation",
+    "harness_error",
+    "inconclusive"
+  ],
+  "adjudicator_exit_codes": {
+    "pass": 0,
+    "protocol_violation": 2,
+    "negative_control_missed": 3,
+    "harness_error": 4,
+    "capability_or_inconclusive": 5
+  },
+  "aggregation_priority": [
+    "harness_error",
+    "protocol_violation",
+    "negative_control_missed",
+    "capability_or_inconclusive",
+    "pass"
+  ]
+}

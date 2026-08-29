@@ -14,10 +14,11 @@ failure from clean 910B fallback. The A100 result matches an already-public
 PyTorch failure class, so it is retained as a regression seed and not claimed as
 an AccelPact discovery.
 
-The protocol is frozen in [`docs/AP_G0Q_PROTOCOL.md`](docs/AP_G0Q_PROTOCOL.md).
+The AP-G0Q protocol is frozen in
+[`docs/AP_G0Q_PROTOCOL.md`](docs/AP_G0Q_PROTOCOL.md).
 No automatic repair, model workload, or large fuzzing framework is implemented.
-The next action is to freeze a separate TP2 communicator-generation protocol
-before its implementation or execution.
+The TP2 communicator-generation protocol is frozen in
+[`docs/AP_G0C_PROTOCOL.md`](docs/AP_G0C_PROTOCOL.md) and awaits implementation.
 
 ## Local checks
 
