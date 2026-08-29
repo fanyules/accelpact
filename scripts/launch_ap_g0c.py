@@ -7,6 +7,7 @@ import importlib
 import json
 import os
 import platform
+import re
 import signal
 import subprocess
 import sys
@@ -23,6 +24,25 @@ MANIFEST_SCHEMA = "accelpact.ap_g0c.sha256_manifest.v1"
 WORLD_SIZE = 2
 SIGTERM = getattr(signal, "SIGTERM", 15)
 SIGKILL = getattr(signal, "SIGKILL", 9)
+WATCHDOG_TIMEOUT_PHRASE = "Watchdog caught collective operation timeout"
+FATAL_TERMINATION_PHRASE = "taking the entire process down"
+
+_CHILD_FAILURE_SECTION = "Failures:"
+_CHILD_ROOT_SECTION = "Root Cause (first observed failure):"
+_CHILD_ERROR_HEADER = (
+    "torch.distributed.elastic.multiprocessing.errors.ChildFailedError:"
+)
+_CHILD_BLOCK = re.compile(r"\[(\d+)\]:")
+_CHILD_RANK = re.compile(r"rank\s*:\s*(-?\d+)(?:\s+\(local_rank:\s*-?\d+\))?")
+_CHILD_EXIT_CODE = re.compile(r"exitcode\s*:\s*(-?\d+)(?:\s+\(pid:\s*\d+\))?")
+_BACKEND_RANK_SCOPES = (
+    re.compile(r"^\[(?:default|rank)?(\d+)\]:", re.IGNORECASE),
+    re.compile(r"\[(?:rank|rankid)\s*[:= ]\s*(\d+)\]", re.IGNORECASE),
+    re.compile(
+        r"(?<![A-Za-z0-9_])(?:rank|rankid)\s*[:=]\s*(\d+)\b",
+        re.IGNORECASE,
+    ),
+)
 
 MARKER_PHASES = {
     "collective_clean_destroy_recreate": (
@@ -437,6 +457,7 @@ def collect_rank_statuses(
 
     statuses: list[dict[str, Any]] = []
     seen: set[str] = set()
+    status_payloads: dict[int, str] = {}
     issues: list[str] = []
     for source, text in texts:
         for line_number, line in enumerate(text.splitlines(), start=1):
@@ -465,9 +486,207 @@ def collect_rank_statuses(
             ):
                 issues.append(f"{source}:{line_number}: invalid rank status rank")
                 continue
+            if rank in status_payloads:
+                issues.append(
+                    f"{source}:{line_number}: conflicting rank status for rank {rank}"
+                )
+            else:
+                status_payloads[rank] = encoded
             statuses.append(payload)
     statuses.sort(key=lambda row: (int(row["rank"]), str(row.get("classification"))))
     return statuses, issues
+
+
+def _child_failed_error_blocks(
+    combined_output: str,
+) -> tuple[list[tuple[str, int, int]], list[str]]:
+    blocks: list[tuple[str, int, int]] = []
+    issues: list[str] = []
+    in_child_failed_error = False
+    section: str | None = None
+    block_line: int | None = None
+    rank: int | None = None
+    exit_code: int | None = None
+
+    def finish_block() -> None:
+        nonlocal block_line, rank, exit_code
+        if block_line is not None:
+            if rank is None or exit_code is None:
+                issues.append(
+                    f"ChildFailedError block at line {block_line} lacks rank/exitcode"
+                )
+            else:
+                assert section is not None
+                blocks.append((section, rank, exit_code))
+        block_line = None
+        rank = None
+        exit_code = None
+
+    for line_number, line in enumerate(combined_output.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped == _CHILD_ERROR_HEADER:
+            finish_block()
+            in_child_failed_error = True
+            section = None
+            continue
+        if not in_child_failed_error:
+            continue
+        if stripped == _CHILD_FAILURE_SECTION:
+            finish_block()
+            section = "failure"
+            continue
+        if stripped == _CHILD_ROOT_SECTION:
+            finish_block()
+            section = "root"
+            continue
+        if section is None:
+            continue
+        if _CHILD_BLOCK.fullmatch(stripped):
+            finish_block()
+            block_line = line_number
+            continue
+        if stripped and set(stripped) == {"="}:
+            finish_block()
+            if section is not None:
+                in_child_failed_error = False
+            section = None
+            continue
+        if block_line is None:
+            continue
+        rank_match = _CHILD_RANK.fullmatch(stripped)
+        if rank_match is not None:
+            value = int(rank_match.group(1))
+            if rank is not None:
+                issues.append(
+                    f"ChildFailedError block at line {block_line} repeats rank"
+                )
+            else:
+                rank = value
+            continue
+        exit_match = _CHILD_EXIT_CODE.fullmatch(stripped)
+        if exit_match is not None:
+            value = int(exit_match.group(1))
+            if exit_code is not None:
+                issues.append(
+                    f"ChildFailedError block at line {block_line} repeats exitcode"
+                )
+            else:
+                exit_code = value
+
+    finish_block()
+    return blocks, issues
+
+
+def _backend_rank_scope(line: str, issues: list[str], line_number: int) -> int | None:
+    ranks = {
+        int(match.group(1))
+        for pattern in _BACKEND_RANK_SCOPES
+        for match in pattern.finditer(line)
+    }
+    if not ranks:
+        return None
+    if len(ranks) != 1:
+        issues.append(f"combined.log:{line_number}: conflicting backend rank scopes")
+        return None
+    rank = next(iter(ranks))
+    if rank not in range(WORLD_SIZE):
+        issues.append(f"combined.log:{line_number}: backend rank is outside world_size")
+        return None
+    return rank
+
+
+def collect_runtime_failure_evidence(
+    combined_output: str,
+    *,
+    launcher_exit_code: int | None,
+    timed_out: bool,
+    statuses: Sequence[dict[str, Any]],
+) -> tuple[dict[str, int], dict[str, Any], list[str]]:
+    blocks, issues = _child_failed_error_blocks(combined_output)
+    exit_values: dict[int, list[int]] = {}
+    root_values: list[tuple[int, int]] = []
+    for section, rank, exit_code in blocks:
+        if rank not in range(WORLD_SIZE):
+            issues.append(f"ChildFailedError contains unexpected rank {rank}")
+            continue
+        exit_values.setdefault(rank, []).append(exit_code)
+        if section == "root":
+            root_values.append((rank, exit_code))
+
+    parsed_exit_codes: dict[str, int] = {}
+    for rank, values in sorted(exit_values.items()):
+        if len(values) > 1:
+            issues.append(
+                f"ChildFailedError contains duplicate exit evidence for rank {rank}"
+            )
+        unique = set(values)
+        if len(unique) != 1:
+            issues.append(
+                f"ChildFailedError contains conflicting exit evidence for rank {rank}"
+            )
+            continue
+        parsed_exit_codes[str(rank)] = next(iter(unique))
+
+    root_cause: dict[str, int] | None = None
+    if len(root_values) > 1:
+        issues.append(
+            "ChildFailedError contains duplicate torchrun root-cause evidence"
+        )
+    unique_roots = set(root_values)
+    if len(unique_roots) > 1:
+        issues.append(
+            "ChildFailedError contains conflicting torchrun root-cause evidence"
+        )
+    elif unique_roots:
+        root_rank, root_exit_code = next(iter(unique_roots))
+        root_cause = {"rank": root_rank, "exit_code": root_exit_code}
+
+    status_ranks = [status.get("rank") for status in statuses]
+    complete_success = (
+        launcher_exit_code == 0
+        and len(status_ranks) == WORLD_SIZE
+        and set(status_ranks) == set(range(WORLD_SIZE))
+    )
+    if complete_success:
+        rank_exit_codes = {str(rank): 0 for rank in range(WORLD_SIZE)}
+        if blocks:
+            issues.append("launcher success conflicts with ChildFailedError evidence")
+    else:
+        rank_exit_codes = parsed_exit_codes
+        if launcher_exit_code is not None and launcher_exit_code != 0 and not timed_out:
+            missing = sorted(
+                set(range(WORLD_SIZE)) - {int(rank) for rank in rank_exit_codes}
+            )
+            if missing:
+                issues.append(
+                    "launcher exited nonzero without complete rank exit codes; "
+                    f"missing ranks {missing}"
+                )
+
+    watchdog_timeout_ranks: set[int] = set()
+    fatal_termination_ranks: set[int] = set()
+    for line_number, line in enumerate(combined_output.splitlines(), start=1):
+        has_watchdog = WATCHDOG_TIMEOUT_PHRASE in line
+        has_fatal = FATAL_TERMINATION_PHRASE in line
+        if not has_watchdog and not has_fatal:
+            continue
+        rank = _backend_rank_scope(line, issues, line_number)
+        if rank is None:
+            continue
+        if has_watchdog:
+            watchdog_timeout_ranks.add(rank)
+        if has_fatal:
+            fatal_termination_ranks.add(rank)
+
+    return (
+        rank_exit_codes,
+        {
+            "torchrun_root_cause": root_cause,
+            "backend_watchdog_timeout_ranks": sorted(watchdog_timeout_ranks),
+            "backend_fatal_termination_ranks": sorted(fatal_termination_ranks),
+        },
+        issues,
+    )
 
 
 def inspect_marker_prefix(
@@ -567,7 +786,15 @@ def build_launcher_evidence(
         litmus_id=args.litmus,
         expected_schedule_digest=digest,
     )
-    issues = status_issues + marker_issues
+    rank_exit_codes, runtime_failure_evidence, failure_issues = (
+        collect_runtime_failure_evidence(
+            combined_output,
+            launcher_exit_code=launcher_exit_code,
+            timed_out=timed_out,
+            statuses=statuses,
+        )
+    )
+    issues = status_issues + marker_issues + failure_issues
     if launch_error is not None:
         issues.append(
             f"{launch_error['stage']}: {launch_error['error_type']}: "
@@ -593,6 +820,8 @@ def build_launcher_evidence(
         "outer_timeout_seconds": config["outer_process_timeout_seconds"],
         "timed_out": timed_out,
         "launcher_exit_code": launcher_exit_code,
+        "rank_exit_codes": rank_exit_codes,
+        "runtime_failure_evidence": runtime_failure_evidence,
         "signals_sent": list(signals_sent),
         "rank_statuses": statuses,
         "marker_prefix": marker_prefix,

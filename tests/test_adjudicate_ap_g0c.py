@@ -228,7 +228,179 @@ def launcher_non_timeout(
     }
 
 
+def backend_fatal_partial_case() -> tuple[
+    dict[int, list[dict[str, object]]],
+    list[dict[str, object]],
+    dict[str, object],
+    dict[int, bool],
+]:
+    litmus_id = "collective_partial_epoch_timeout_recreate"
+    row = result_row(1, 0, "harness_error", litmus_id=litmus_id)
+    row["backend"] = "hccl"
+    targets = [
+        "enqueued",
+        "completed",
+        "reusable_same_generation",
+        "epoch_open",
+        "enqueued",
+        "failed_unknown",
+        "aborting",
+        "destroyed",
+    ]
+    transitions, final_state = transition_rows(targets)
+    row["transitions"] = transitions
+    row["final_state"] = final_state
+    observations = row["observations"]
+    assert isinstance(observations, dict)
+    epoch_digest = adjudicator._canonical_digest([0, 0, 1, 2])
+    observations.update(
+        {
+            "collective_backend": "hccl",
+            "normalized_error_type": "MarkerError",
+            "epoch_start": 0,
+            "epoch_end": 1,
+            "completion_count": 1,
+            "epoch_ledger": [
+                {
+                    "generation": 0,
+                    "epoch": 0,
+                    "completion_count": 1,
+                    "expected_payload_digest": epoch_digest,
+                    "observed_payload_digest": epoch_digest,
+                    "payload_matches": True,
+                }
+            ],
+            "expected_payload_digest": "warmup-aggregate",
+            "observed_payload_digest": "warmup-aggregate",
+            "local_enqueued": False,
+            "local_enqueue_role": "skip_fault",
+            "fault_details": {
+                "fault_observed": True,
+                "work_handle_present": True,
+            },
+        }
+    )
+
+    markers = [marker(rank, "fault_ready", litmus_id=litmus_id) for rank in range(2)]
+    markers.extend(
+        [
+            marker(
+                0,
+                "fault_observed",
+                litmus_id=litmus_id,
+                fault_observed=True,
+                local_enqueued=True,
+                work_handle_present=True,
+            ),
+            marker(
+                1,
+                "fault_observed",
+                litmus_id=litmus_id,
+                fault_observed=True,
+                local_enqueued=False,
+                rank_0_work_handle_present=True,
+            ),
+        ]
+    )
+    markers.extend(
+        marker(rank, "ready_destroy", litmus_id=litmus_id) for rank in range(2)
+    )
+    markers.append(marker(1, "destroyed", litmus_id=litmus_id))
+
+    launcher = {
+        "protocol_id": adjudicator.PROTOCOL_ID,
+        "run_id": RUN_ID,
+        "litmus_id": litmus_id,
+        "world_size": 2,
+        "schedule_digest": SCHEDULE_DIGEST,
+        "platform": "910b",
+        "source_revision": "bb25b98",
+        "timed_out": False,
+        "signals_sent": [],
+        "launcher_exit_code": 1,
+        "schedule_complete": False,
+        "final_phase": "ready_destroy",
+        "evidence_issues": [],
+        "rank_exit_codes": {"0": -15, "1": 4},
+        "runtime_failure_evidence": {
+            "torchrun_root_cause": {"rank": 1, "exit_code": 4},
+            "backend_watchdog_timeout_ranks": [0],
+            "backend_fatal_termination_ranks": [0],
+        },
+        "rank_jsonl": {
+            "0": {"path": "ranks/rank-0000.jsonl", "exists": False},
+            "1": {"path": "ranks/rank-0001.jsonl", "exists": True},
+        },
+        "rank_statuses": [rank_status(1, "harness_error", litmus_id=litmus_id)],
+    }
+    return {0: [], 1: [row]}, markers, launcher, {0: False, 1: True}
+
+
 class AdjudicatorTests(unittest.TestCase):
+    def test_backend_fatal_partial_path_is_run_level_capability_failure(self) -> None:
+        rows, markers, launcher, presence = backend_fatal_partial_case()
+        summary = adjudicator.adjudicate_evidence(
+            rows,
+            markers,
+            launcher,
+            rank_file_presence=presence,
+        )
+        self.assertEqual(
+            summary["aggregate_classification"],
+            "reinitialization_capability_failure",
+        )
+        self.assertEqual(summary["exit_code"], 5)
+        self.assertTrue(summary["evidence_valid"])
+        self.assertEqual(summary["rank_row_counts"], {"0": 0, "1": 1})
+        self.assertEqual(summary["rank_generations"], {"0": [], "1": [0]})
+
+    def test_backend_fatal_partial_path_is_closed_under_missing_evidence(
+        self,
+    ) -> None:
+        mutations = {
+            "fatal_evidence": lambda _rows, _markers, launcher: launcher[
+                "runtime_failure_evidence"
+            ].pop("backend_fatal_termination_ranks"),
+            "phase": lambda _rows, markers, _launcher: markers.remove(
+                next(
+                    item
+                    for item in markers
+                    if item["phase"] == "ready_destroy" and item["rank"] == 0
+                )
+            ),
+            "exit": lambda _rows, _markers, launcher: launcher[
+                "rank_exit_codes"
+            ].update({"0": -9}),
+            "signal": lambda _rows, _markers, launcher: launcher.update(
+                {"signals_sent": ["SIGTERM"]}
+            ),
+            "digest": lambda _rows, markers, _launcher: markers[0].update(
+                {"schedule_digest": "mismatch"}
+            ),
+            "source_revision": lambda rows, _markers, _launcher: rows[1][0][
+                "observations"
+            ].update({"source_revision": "different"}),
+            "backend": lambda rows, _markers, _launcher: rows[1][0].update(
+                {"backend": "nccl"}
+            ),
+            "root": lambda _rows, _markers, launcher: launcher[
+                "runtime_failure_evidence"
+            ].update({"torchrun_root_cause": {"rank": 0, "exit_code": -15}}),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                rows, markers, launcher, presence = backend_fatal_partial_case()
+                mutate(rows, markers, launcher)
+                summary = adjudicator.adjudicate_evidence(
+                    rows,
+                    markers,
+                    launcher,
+                    rank_file_presence=presence,
+                )
+                self.assertEqual(summary["aggregate_classification"], "harness_error")
+                self.assertEqual(summary["exit_code"], 4)
+                self.assertFalse(summary["evidence_valid"])
+
     def test_valid_same_generation_rows_pass(self) -> None:
         rows = {
             0: [result_row(0, 0, "valid_pass")],
@@ -296,6 +468,21 @@ class AdjudicatorTests(unittest.TestCase):
         self.assertEqual(summary["exit_code"], 5)
         self.assertEqual(summary["rank_row_counts"], {"0": 0, "1": 0})
         self.assertEqual(summary["classifications"], {"capability_timeout": 1})
+        self.assertTrue(summary["evidence_valid"])
+
+    def test_outer_timeout_allows_nonzero_rank_exits_without_statuses(self) -> None:
+        litmus_id = "collective_clean_destroy_recreate"
+        markers = [
+            marker(rank, phase, litmus_id=litmus_id)
+            for phase in adjudicator.MARKER_PHASES[litmus_id]
+            for rank in range(2)
+        ]
+        launcher = launcher_timeout(litmus_id)
+        launcher["rank_exit_codes"] = {"0": -15, "1": -9}
+        launcher["rank_statuses"] = []
+        summary = adjudicator.adjudicate_evidence({0: [], 1: []}, markers, launcher)
+        self.assertEqual(summary["aggregate_classification"], "capability_timeout")
+        self.assertEqual(summary["exit_code"], 5)
         self.assertTrue(summary["evidence_valid"])
 
     def test_incomplete_timeout_is_harness_error(self) -> None:

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Sequence
 from pathlib import Path
 from unittest.mock import call, patch
 
@@ -79,6 +80,39 @@ class SigtermProcess:
             assert callable(handler)
             handler(launcher.SIGTERM, None)
         return "partial rank output\n", None
+
+
+def child_failed_output(
+    *,
+    failures: Sequence[tuple[int, int]] = (),
+    roots: Sequence[tuple[int, int]] = (),
+    prefix_lines: Sequence[str] = (),
+) -> str:
+    lines = [
+        *prefix_lines,
+        "torch.distributed.elastic.multiprocessing.errors.ChildFailedError:",
+        "============================================================",
+        "Failures:",
+    ]
+    for rank, exit_code in failures:
+        lines.extend(
+            [
+                f"[{rank}]:",
+                f"  rank      : {rank} (local_rank: {rank})",
+                f"  exitcode  : {exit_code} (pid: {41010 + rank})",
+            ]
+        )
+    lines.append("Root Cause (first observed failure):")
+    for rank, exit_code in roots:
+        lines.extend(
+            [
+                f"[{rank}]:",
+                f"  rank      : {rank} (local_rank: {rank})",
+                f"  exitcode  : {exit_code} (pid: {41020 + rank})",
+            ]
+        )
+    lines.append("============================================================")
+    return "\n".join(lines) + "\n"
 
 
 class LauncherTests(unittest.TestCase):
@@ -206,11 +240,221 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(len(evidence["rank_statuses"]), 2)
         self.assertTrue(evidence["schedule_complete"])
         self.assertFalse(evidence["timed_out"])
-        self.assertNotIn("rank_exit_codes", evidence)
+        self.assertEqual(evidence["rank_exit_codes"], {"0": 0, "1": 0})
+        self.assertEqual(
+            evidence["runtime_failure_evidence"],
+            {
+                "torchrun_root_cause": None,
+                "backend_watchdog_timeout_ranks": [],
+                "backend_fatal_termination_ranks": [],
+            },
+        )
         self.assertEqual(commands["torchrun"], command)
         self.assertIn("summary.json", manifest["artifacts"])
         self.assertIn("combined.log", manifest["artifacts"])
         self.assertNotIn("sha256_manifest.json", manifest["artifacts"])
+
+    def test_conflicting_rank_statuses_invalidate_schedule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = self.args(root, root / "torchrun")
+            config = launcher.load_config(args.config)
+            rank_zero = self.rank_status(args, config, 0)
+            conflicting_rank_zero = dict(rank_zero)
+            conflicting_rank_zero.update(
+                {
+                    "classification": "harness_error",
+                    "error": "marker failure",
+                    "error_type": "MarkerError",
+                }
+            )
+            rank_one = self.rank_status(args, config, 1)
+            output = "\n".join(
+                json.dumps(status)
+                for status in (
+                    rank_zero,
+                    conflicting_rank_zero,
+                    rank_one,
+                    rank_one,
+                )
+            )
+            evidence = launcher.build_launcher_evidence(
+                config,
+                args,
+                combined_output=output,
+                torchrun_log_dir=root / "torchrun-logs",
+                launcher_exit_code=0,
+                timed_out=False,
+                signals_sent=[],
+            )
+
+        self.assertEqual(len(evidence["rank_statuses"]), 3)
+        self.assertFalse(evidence["schedule_complete"])
+        self.assertTrue(
+            any(
+                "conflicting rank status for rank 0" in issue
+                for issue in evidence["evidence_issues"]
+            )
+        )
+
+    def test_910b_child_failure_and_rank_scoped_watchdog_are_structured(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = self.args(root, root / "torchrun")
+            args.platform = "910b"
+            args.litmus = "collective_partial_epoch_timeout_recreate"
+            config = launcher.load_config(args.config)
+            rank_one_status = self.rank_status(args, config, 1)
+            rank_one_status["classification"] = "harness_error"
+            output = (
+                json.dumps(rank_one_status)
+                + "\n"
+                + child_failed_output(
+                    failures=((0, -15),),
+                    roots=((1, 4),),
+                    prefix_lines=(
+                        "[default0]:[ERROR] Watchdog caught collective operation "
+                        "timeout for HCCL work",
+                        "[default0]:[ERROR] watchdog is taking the entire process down",
+                    ),
+                )
+            )
+
+            evidence = launcher.build_launcher_evidence(
+                config,
+                args,
+                combined_output=output,
+                torchrun_log_dir=root / "torchrun-logs",
+                launcher_exit_code=1,
+                timed_out=False,
+                signals_sent=[],
+            )
+
+        self.assertEqual(evidence["rank_exit_codes"], {"0": -15, "1": 4})
+        self.assertEqual(
+            evidence["runtime_failure_evidence"],
+            {
+                "torchrun_root_cause": {"rank": 1, "exit_code": 4},
+                "backend_watchdog_timeout_ranks": [0],
+                "backend_fatal_termination_ranks": [0],
+            },
+        )
+        self.assertEqual(evidence["evidence_issues"], [])
+
+    def test_nonzero_launcher_requires_both_child_exit_codes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = self.args(root, root / "torchrun")
+            config = launcher.load_config(args.config)
+            evidence = launcher.build_launcher_evidence(
+                config,
+                args,
+                combined_output=child_failed_output(
+                    roots=((0, -15),),
+                    prefix_lines=(
+                        "Watchdog caught collective operation timeout",
+                        "taking the entire process down",
+                    ),
+                ),
+                torchrun_log_dir=root / "torchrun-logs",
+                launcher_exit_code=1,
+                timed_out=False,
+                signals_sent=[],
+            )
+
+        self.assertEqual(evidence["rank_exit_codes"], {"0": -15})
+        self.assertEqual(
+            evidence["runtime_failure_evidence"]["backend_watchdog_timeout_ranks"],
+            [],
+        )
+        self.assertEqual(
+            evidence["runtime_failure_evidence"]["backend_fatal_termination_ranks"],
+            [],
+        )
+        self.assertTrue(
+            any("missing ranks [1]" in issue for issue in evidence["evidence_issues"])
+        )
+
+    def test_outer_timeout_does_not_require_child_failed_exit_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = self.args(root, root / "torchrun")
+            args.litmus = "collective_partial_epoch_timeout_recreate"
+            config = launcher.load_config(args.config)
+            for rank in range(launcher.WORLD_SIZE):
+                launcher._write_json_new(
+                    args.run_dir / "control" / "fault_ready" / f"rank-{rank:04d}.json",
+                    {
+                        "litmus_id": args.litmus,
+                        "phase": "fault_ready",
+                        "protocol_id": launcher.PROTOCOL_ID,
+                        "rank": rank,
+                        "run_id": args.run_id,
+                        "schedule_digest": launcher.schedule_digest(config, args),
+                        "world_size": launcher.WORLD_SIZE,
+                    },
+                )
+            evidence = launcher.build_launcher_evidence(
+                config,
+                args,
+                combined_output="",
+                torchrun_log_dir=root / "torchrun-logs",
+                launcher_exit_code=-int(launcher.SIGKILL),
+                timed_out=True,
+                signals_sent=["SIGTERM", "SIGKILL"],
+            )
+
+        self.assertEqual(evidence["rank_exit_codes"], {})
+        self.assertEqual(evidence["evidence_issues"], [])
+        self.assertTrue(evidence["schedule_complete"])
+        self.assertEqual(evidence["final_phase"], "device_work")
+
+    def test_conflicting_child_exit_evidence_is_not_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = self.args(root, root / "torchrun")
+            config = launcher.load_config(args.config)
+            evidence = launcher.build_launcher_evidence(
+                config,
+                args,
+                combined_output=child_failed_output(
+                    failures=((0, -9), (1, 4)),
+                    roots=((0, -15),),
+                ),
+                torchrun_log_dir=root / "torchrun-logs",
+                launcher_exit_code=1,
+                timed_out=False,
+                signals_sent=[],
+            )
+
+        self.assertEqual(evidence["rank_exit_codes"], {"1": 4})
+        issues = "\n".join(evidence["evidence_issues"])
+        self.assertIn("duplicate exit evidence for rank 0", issues)
+        self.assertIn("conflicting exit evidence for rank 0", issues)
+        self.assertIn("missing ranks [0]", issues)
+
+    def test_conflicting_root_cause_evidence_is_not_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = self.args(root, root / "torchrun")
+            config = launcher.load_config(args.config)
+            evidence = launcher.build_launcher_evidence(
+                config,
+                args,
+                combined_output=child_failed_output(roots=((0, -15), (1, 4))),
+                torchrun_log_dir=root / "torchrun-logs",
+                launcher_exit_code=1,
+                timed_out=False,
+                signals_sent=[],
+            )
+
+        self.assertEqual(evidence["rank_exit_codes"], {"0": -15, "1": 4})
+        self.assertIsNone(evidence["runtime_failure_evidence"]["torchrun_root_cause"])
+        issues = "\n".join(evidence["evidence_issues"])
+        self.assertIn("duplicate torchrun root-cause evidence", issues)
+        self.assertIn("conflicting torchrun root-cause evidence", issues)
 
     def test_adjudicator_command_discovers_markers_created_by_workers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

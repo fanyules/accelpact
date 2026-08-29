@@ -669,11 +669,10 @@ def adjudicate_evidence(
     schedule_complete = _launcher_bool(
         launcher, "schedule_complete", "complete_schedule", issues
     )
-    if launcher is not None and not timed_out and not schedule_complete:
-        issues.append("non-timeout launcher evidence requires schedule_complete=true")
     final_phase: Any = None
     status_ranks: set[int] = set()
     status_classifications: list[str] = []
+    status_records: dict[int, Mapping[str, Any]] = {}
     if launcher is not None:
         record_identity(launcher, "launcher")
         final_phase = launcher.get("final_phase", launcher.get("last_valid_phase"))
@@ -701,12 +700,14 @@ def adjudicate_evidence(
                 issues.append(f"{source}: duplicate rank status")
             else:
                 status_ranks.add(rank)
+                status_records[rank] = status
             if classification not in KNOWN_CLASSIFICATIONS:
                 issues.append(f"{source}: unknown classification {classification}")
             else:
                 status_classifications.append(str(classification))
 
     exit_codes = _rank_exit_codes(launcher)
+    nonzero_exit_without_status: list[int] = []
     for rank, exit_code in exit_codes.items():
         if rank not in range(WORLD_SIZE):
             issues.append(f"launcher: unexpected rank exit code for rank {rank}")
@@ -719,20 +720,20 @@ def adjudicate_evidence(
             issues.append(f"launcher: invalid exit code for rank {rank}")
             continue
         if nonzero and rank not in status_ranks:
-            issues.append(f"launcher: nonzero rank {rank} exit lacks rank_status")
+            nonzero_exit_without_status.append(rank)
+    launcher_exit_value: int | None = None
+    launcher_exit_missing_status = False
     if launcher is not None and not timed_out:
         launcher_exit_code = launcher.get("launcher_exit_code")
         if launcher_exit_code is not None:
             try:
-                launcher_failed = int(launcher_exit_code) != 0
+                launcher_exit_value = int(launcher_exit_code)
             except (TypeError, ValueError):
                 issues.append("launcher: launcher_exit_code must be an integer or null")
             else:
-                if launcher_failed and status_ranks != set(range(WORLD_SIZE)):
-                    issues.append(
-                        "launcher: nonzero launcher_exit_code requires both "
-                        "rank_statuses"
-                    )
+                launcher_exit_missing_status = (
+                    launcher_exit_value != 0 and status_ranks != set(range(WORLD_SIZE))
+                )
     classifications.extend(status_classifications)
 
     for key, values in identity.items():
@@ -799,6 +800,166 @@ def adjudicate_evidence(
     allowed_shapes = (
         _allowed_row_shapes(str(litmus_id)) if isinstance(litmus_id, str) else set()
     )
+
+    runtime_failure = (
+        launcher.get("runtime_failure_evidence")
+        if isinstance(launcher, Mapping)
+        else None
+    )
+    launcher_rank_jsonl = (
+        launcher.get("rank_jsonl") if isinstance(launcher, Mapping) else None
+    )
+    narrow_backend_fatal = (
+        not issues
+        and isinstance(launcher, Mapping)
+        and launcher.get("platform") == "910b"
+        and isinstance(launcher.get("source_revision"), str)
+        and bool(launcher.get("source_revision"))
+        and litmus_id == "collective_partial_epoch_timeout_recreate"
+        and timed_out is False
+        and launcher.get("signals_sent") == []
+        and launcher_exit_value is not None
+        and launcher_exit_value != 0
+        and schedule_complete is False
+        and final_phase == "ready_destroy"
+        and launcher.get("evidence_issues") == []
+        and exit_codes == {0: -15, 1: 4}
+        and isinstance(runtime_failure, Mapping)
+        and runtime_failure.get("torchrun_root_cause") == {"rank": 1, "exit_code": 4}
+        and runtime_failure.get("backend_watchdog_timeout_ranks") == [0]
+        and runtime_failure.get("backend_fatal_termination_ranks") == [0]
+        and marker_phase_ranks
+        == {
+            "fault_ready": {0, 1},
+            "fault_observed": {0, 1},
+            "ready_destroy": {0, 1},
+            "destroyed": {1},
+        }
+        and "recreate_start" not in marker_phase_ranks
+        and rank_file_presence.get(0) is False
+        and rank_file_presence.get(1) is True
+        and len(rank_rows.get(0, ())) == 0
+        and len(rank_rows.get(1, ())) == 1
+        and shapes[0] == ()
+        and shapes[1] == ((0, "harness_error"),)
+        and status_ranks == {1}
+        and status_classifications == ["harness_error"]
+        and isinstance(launcher_rank_jsonl, Mapping)
+        and isinstance(launcher_rank_jsonl.get("0"), Mapping)
+        and launcher_rank_jsonl["0"].get("exists") is False
+        and isinstance(launcher_rank_jsonl.get("1"), Mapping)
+        and launcher_rank_jsonl["1"].get("exists") is True
+    )
+    if narrow_backend_fatal:
+        narrow_issues: list[str] = []
+        result = validated_results.get((1, 0))
+        observations = row_observations.get((1, 0))
+        status = status_records.get(1)
+        expected_targets = (
+            "enqueued",
+            "completed",
+            "reusable_same_generation",
+            "epoch_open",
+            "enqueued",
+            "failed_unknown",
+            "aborting",
+            "destroyed",
+        )
+        if result is None or observations is None or status is None:
+            narrow_issues.append("secondary rank evidence is incomplete")
+        else:
+            targets = tuple(event.target for event in result.transitions)
+            if result.final_state != "destroyed" or targets != expected_targets:
+                narrow_issues.append("secondary rank row has the wrong lifecycle")
+            if observations.get("normalized_error_type") != "MarkerError":
+                narrow_issues.append("secondary rank row is not a MarkerError")
+            if observations.get("local_enqueued") is not False:
+                narrow_issues.append("secondary rank must not enqueue the fault")
+            if observations.get("local_enqueue_role") != "skip_fault":
+                narrow_issues.append("secondary rank must have skip_fault role")
+            fault_details = observations.get("fault_details")
+            if (
+                not isinstance(fault_details, Mapping)
+                or fault_details.get("fault_observed") is not True
+                or fault_details.get("work_handle_present") is not True
+            ):
+                narrow_issues.append("secondary row lacks rank-0 fault evidence")
+            if (
+                result.backend != "hccl"
+                or observations.get("collective_backend") != "hccl"
+            ):
+                narrow_issues.append("secondary row backend must be hccl")
+            if observations.get("source_revision") != launcher.get("source_revision"):
+                narrow_issues.append(
+                    "secondary row source_revision mismatches launcher"
+                )
+            if observations.get("tensor_shape") != [4]:
+                narrow_issues.append("secondary row tensor_shape must equal [4]")
+            if observations.get("dtype") != "int64":
+                narrow_issues.append("secondary row dtype must equal int64")
+            if observations.get("reduce_op") != "sum":
+                narrow_issues.append("secondary row reduce_op must equal sum")
+            _validate_success_observations(
+                observations,
+                source="rank 1 g0",
+                generation=0,
+                expected=(0, 1, 1),
+                issues=narrow_issues,
+            )
+            if status.get("classification") != "harness_error":
+                narrow_issues.append("secondary rank status must be harness_error")
+
+        fault_rank_zero = marker_records.get(("fault_observed", 0))
+        fault_rank_one = marker_records.get(("fault_observed", 1))
+        if (
+            fault_rank_zero is None
+            or fault_rank_zero.get("fault_observed") is not True
+            or fault_rank_zero.get("local_enqueued") is not True
+            or fault_rank_zero.get("work_handle_present") is not True
+        ):
+            narrow_issues.append("rank-0 fault marker is incomplete")
+        if (
+            fault_rank_one is None
+            or fault_rank_one.get("fault_observed") is not True
+            or fault_rank_one.get("local_enqueued") is not False
+            or fault_rank_one.get("rank_0_work_handle_present") is not True
+        ):
+            narrow_issues.append("rank-1 fault marker is incomplete")
+
+        if not narrow_issues:
+            return {
+                "schema": SUMMARY_SCHEMA,
+                "protocol_id": protocol_id,
+                "run_id": run_id,
+                "litmus_id": litmus_id,
+                "world_size": world_size,
+                "schedule_digest": schedule_digest,
+                "rank_row_counts": {"0": 0, "1": 1},
+                "rank_generations": {"0": [], "1": [0]},
+                "rank_jsonl_present": {"0": False, "1": True},
+                "marker_phases": {
+                    phase: sorted(ranks)
+                    for phase, ranks in sorted(marker_phase_ranks.items())
+                },
+                "launcher_timed_out": False,
+                "schedule_complete": False,
+                "final_phase": "ready_destroy",
+                "classifications": {"reinitialization_capability_failure": 1},
+                "aggregate_classification": ("reinitialization_capability_failure"),
+                "evidence_valid": True,
+                "issues": [],
+                "exit_code": 5,
+            }
+
+    if launcher is not None and not timed_out and not schedule_complete:
+        issues.append("non-timeout launcher evidence requires schedule_complete=true")
+    if not timed_out:
+        for rank in nonzero_exit_without_status:
+            issues.append(f"launcher: nonzero rank {rank} exit lacks rank_status")
+        if launcher_exit_missing_status:
+            issues.append(
+                "launcher: nonzero launcher_exit_code requires both rank_statuses"
+            )
 
     if not timeout_complete:
         if total_rows == 0:
